@@ -23,7 +23,7 @@ DEVICE = 'cpu'
 torch.manual_seed(42)
 
 # Written from Multiflow paper
-def mask_seq(s: torch.Tensor, x, v, mask_char):
+def mask_seq(s: torch.Tensor, x, v, mask_char, epsilon = 1e-3):
     B, L = s.shape
     s_t = torch.clone(s).to(s.device)
     x_t = torch.clone(x).to(x.device)
@@ -31,12 +31,14 @@ def mask_seq(s: torch.Tensor, x, v, mask_char):
 
     # TODO: after Ribogen test try correlated masking (same area of sequence / geometry)
     t = torch.rand(B, device=s.device)  # t sampled from U(0,1)
+    t = t * (1 - 2 * epsilon) + epsilon
     # TODO: The noised version of X and V should not be mask tokens but should be Normal distribution for V and maybe exp like (12) in Multiflow for X
     s_t[torch.rand((B, L), device=s.device) < t[:, None]] = (
         mask_char  
     )
 
     x_0, v_0 = torch.normal(torch.zeros_like(x)), torch.normal(torch.zeros_like(v))
+    x_0 = x_0 - torch.mean(x_0, dim=1, keepdim=True) # Center the gaussian noise
 
     x_t = x * t[:, None, None] + (1 - t[:, None, None]) * x_0
     v_t = v * t[:, None, None] + (1 - t[:, None, None]) * v_0
@@ -56,10 +58,10 @@ def run_epoch(model, optimizer, dataloader, loss_func, wandb_run):
     s_t, x_t, v_t, x_0, v_0, t = mask_seq(s_b, x_b, v_b, 5) # TODO: Think of how to encode mask token. hardcoded 5 is not ideal obv
     s_pred, x_pred, v_pred = model(s_t, x_t, v_t, t, token_mask)
 
-    loss = loss_func(x_pred, x_b, x_0, v_pred, v_b, v_0, s_pred.reshape((-1, 4)), s_b.reshape(-1), token_mask, atom_mask)
+    loss = loss_func(x_pred, x_b, v_pred, v_b, s_pred.reshape((-1, 4)), s_b.reshape(-1), token_mask, atom_mask)
 
     pbar.set_description(f"Loss: {loss}")
-    wandb_run.log({'loss': loss['loss'], 'cfm_x_loss': loss['cfm_x'], 'cfm_v_loss': loss['cfm_v'] , 'dfm': loss['dfm']})
+    wandb_run.log(loss)
 
 
     loss['loss'].backward()
