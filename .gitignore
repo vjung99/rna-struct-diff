@@ -1,0 +1,12 @@
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+/dataset/BGSU__M__All__All__4_0__pdb_4_55
+/dataset/oversize
+/__pycache__
+/dataset
+/src/data/__pycache__
+/src/nn/__pycache__
+/wandb
+/samples
+/.DS_Store

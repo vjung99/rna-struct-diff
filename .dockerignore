@@ -1,0 +1,24 @@
+# environments
+.venv
+
+# heavy data & checkpoints
+dataset
+samples
+*.pt
+**/*.pt
+*.pth
+**/*.pth
+*.npz
+**/*.npz
+
+# caches & local artifacts
+__pycache__
+**/__pycache__
+*.pyc
+**/*.pyc
+wandb
+
+# vcs / os junk
+.git
+.DS_Store
+**/.DS_Store
