@@ -19,6 +19,35 @@ INT_TO_BASE = {v: k for k, v in BASE_TO_INT.items()}
 DATASET_DIR = "./dataset/BGSU__M__All__All__4_0__pdb_4_55"
 SKIP_DIR = "./dataset/oversize"
 
+# Heavy atoms following description in Ribodiff sec 4.1
+HEAVY_ATOMS = (
+    ["P", "OP1", "OP2", "OP3", "O5'"]  # Phosphate group
+    + [
+        "C5'",
+        "C4'",
+        "O4'",
+        "C3'",
+        "O3'",
+        "C2'",
+        "O2'",
+        "C1'",
+    ]  # Sugar ribose
+    + [
+        "N9",
+        "C8",
+        "N7",
+        "C5",
+        "C6",
+        "N6",
+        "O6",
+        "N1",
+        "C2",
+        "N3",
+        "C4",
+    ]  # Purine
+    + ["N1", "C2", "O2", "N3", "C4", "N4", "O4", "C5", "C6"]  # Pyrimidine
+)
+
 
 def pdb_id(path):
     return os.path.basename(path).split("_")[1].lstrip("0")
@@ -26,6 +55,11 @@ def pdb_id(path):
 
 def process_pdb(path):
     df = pl.from_pandas(PandasPdb().read_pdb(path).df["ATOM"])
+
+    df = df.filter(
+        pl.col("atom_name").str.strip_chars().is_in(HEAVY_ATOMS)
+    )
+
     modified_nucleotide = False
 
     SX = (
@@ -119,13 +153,13 @@ def build_dataset():
             kept.append(i)
 
     # Centering and scaling
-    X_centered = np.nanmean(X, axis=1, keepdims=True)   
+    X_centered = np.nanmean(X, axis=1, keepdims=True)
     X = X - X_centered
 
-    x_scale = np.nanstd(X)                        
+    x_scale = np.nanstd(X)
     X = X / x_scale
 
-    v_scale = np.nanstd(V)                        
+    v_scale = np.nanstd(V)
     V = V / v_scale
 
     print(f"kept {len(kept)}, skipped {n - len(kept)}")
