@@ -55,14 +55,14 @@ class EuclidianNeuralNet(nn.Module):
     B, L = s.shape
     keep = token_mask.bool()
 
-    t_features = self._embed_t(t, 16, max_positions=2056).unsqueeze(1).expand(-1, L, -1)   # (B, L, 16) 
+    t_features = self._embed_t(t, 16, max_positions=2056).unsqueeze(1).expand(-1, L, -1).to(s.device)   # (B, L, 16) 
 
     s_embed = self.nucleotide_embedding(s.long())
     features = torch.concat((s_embed, t_features, x, v), dim=-1)
 
     s_embed = s_embed[keep]
     features = features[keep]
-    batch = torch.arange(B).repeat_interleave(L)[keep.flatten()]
+    batch = torch.arange(B, device = s.device).repeat_interleave(L)[keep.flatten()]
 
     data = {"pos": x[keep], "x": features, "batch": batch}
 

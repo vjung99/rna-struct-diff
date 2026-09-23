@@ -10,3 +10,4 @@
 /wandb
 /samples
 /.DS_Store
+/e3nn_checkpoint.pt

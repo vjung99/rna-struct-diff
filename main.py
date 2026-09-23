@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 import wandb
 
@@ -23,7 +24,7 @@ TODO: Implement RNAFLOW
 
 """
 
-DEVICE = "cpu"
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MASK_TOKEN = 5
 torch.manual_seed(42)
 
@@ -37,7 +38,7 @@ def centered_noise(shape):
 def sample_from_model(s_0, x_0, v_0, model, steps=200, epsilon=1e-2):
     def unmask_seq_random(s_0, s_logits, dt, t):
         reveal = (dt / (1 - t)).clamp(max=1.0)
-        draw = torch.rand(s_0.shape) < reveal
+        draw = torch.rand(s_0.shape, device=s_0.device) < reveal
         tokens = torch.multinomial(
             F.softmax(s_logits, dim=-1).flatten(0, 1), 1
         ).reshape(s_0.shape)
@@ -47,8 +48,8 @@ def sample_from_model(s_0, x_0, v_0, model, steps=200, epsilon=1e-2):
 
     prev_t = 0
     s_logits = None
-    token_mask = torch.ones(B, L, dtype=torch.bool)
-    for t in torch.linspace(epsilon, 1 - epsilon, steps):
+    token_mask = torch.ones(B, L, dtype=torch.bool, device=s_0.device)
+    for t in torch.linspace(epsilon, 1 - epsilon, steps, device=s_0.device):
         dt = t - prev_t
         t_b = t.expand(B)
         s_logits, x_hat, v_hat = model(s_0, x_0, v_0, t_b, token_mask)
@@ -74,8 +75,8 @@ def mask_seq(s: torch.Tensor, x, v, mask_char, epsilon=1e-2):
     # TODO: The noised version of X and V should not be mask tokens but should be Normal distribution for V and maybe exp like (12) in Multiflow for X
     s_t[torch.rand((B, L), device=s.device) < t[:, None]] = mask_char
 
-    v_0 = torch.normal(torch.zeros_like(v))
-    x_0 = centered_noise(x.shape)
+    v_0 = torch.normal(torch.zeros_like(v)).to(s.device)
+    x_0 = centered_noise(x.shape).to(s.device)
 
     x_t = x * t[:, None, None] + (1 - t[:, None, None]) * x_0
     v_t = v * t[:, None, None] + (1 - t[:, None, None]) * v_0
@@ -91,10 +92,12 @@ def run_epoch(model, optimizer, dataloader, loss_func, wandb_run):
         s_b = s_b.to(DEVICE)
         x_b = x_b.to(DEVICE)
         v_b = v_b.to(DEVICE)
+        token_mask = token_mask.to(DEVICE)
+        atom_mask = atom_mask.to(DEVICE)
 
         s_t, x_t, v_t, x_0, v_0, t = mask_seq(
             s_b, x_b, v_b, MASK_TOKEN
-        )  # TODO: Think of how to encode mask token. hardcoded 5 is not ideal obv
+        )
         s_pred, x_pred, v_pred = model(s_t, x_t, v_t, t, token_mask)
 
         loss = loss_func(
@@ -109,7 +112,8 @@ def run_epoch(model, optimizer, dataloader, loss_func, wandb_run):
             t,
         )
 
-        pbar.set_description(f"Loss: {loss}")
+        losses = {k:v.item() for (k, v) in loss.items()}
+        pbar.set_description(f"Loss: {losses}")
         wandb_run.log(loss)
 
         loss["loss"].backward()
@@ -128,9 +132,11 @@ def train(model, dataloader, args):
 
     loss_func = MultiflowLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     for i in range(args.epochs):
         run_epoch(model, optimizer, dataloader, loss_func, wandb_run)
+        scheduler.step()
         torch.save(model.state_dict(), args.checkpoint)
 
 
@@ -154,6 +160,7 @@ def getargs():
     i.add_argument("--length", type=int, default=70)
     i.add_argument("--samples", type=int, default=10)
     i.add_argument('-o', '--out', default='./samples')
+    i.add_argument("-d", "--dataset", default="./dataset/dataset.npz")
 
     return parser.parse_args()
 
@@ -161,7 +168,7 @@ def getargs():
 if __name__ == "__main__":
     args = getargs()
 
-    model = EuclidianNeuralNet(layers=args.layers)
+    model = EuclidianNeuralNet(layers=args.layers).to(DEVICE)
 
     match args.cmd:
         case "train":
@@ -176,18 +183,18 @@ if __name__ == "__main__":
             train(model, dataloader, args)
         case "inference":
             model.load_state_dict(torch.load(args.checkpoint, weights_only=True))
-            s_0 = torch.full((args.samples, args.length), MASK_TOKEN, dtype=torch.long)
-            x_0 = centered_noise((args.samples, args.length, 3))
-            v_0 = torch.randn(args.samples, args.length, 72)
+            s_0 = torch.full((args.samples, args.length), MASK_TOKEN, dtype=torch.long, device=DEVICE)
+            x_0 = centered_noise((args.samples, args.length, 3)).to(DEVICE)
+            v_0 = torch.randn(args.samples, args.length, 72, device=DEVICE)
             s, x, v = sample_from_model(s_0, x_0, v_0, model, steps=args.steps)
-            df = np.load("./dataset/dataset.npz")
-            x_A = x.numpy() * float(df["x_scale"])
-            v_A = v.numpy() * float(df["v_scale"])
+            df = np.load(args.dataset)
+            x_A = x.cpu().numpy() * float(df["x_scale"])
+            v_A = v.cpu().numpy() * float(df["v_scale"])
             np.savez(
                 args.out,
-                S=s.numpy(),
-                X= x_A,
-                V= v_A,
+                S=s.cpu().numpy(),
+                X=x_A,
+                V=v_A,
             )
             print("masks left:", int((s == MASK_TOKEN).sum()))
             for k in range(args.samples):
