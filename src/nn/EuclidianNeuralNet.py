@@ -6,16 +6,19 @@ from e3nn import o3
 
 import math
 
+from dataset import N_ATOMS, NUM_BASES, VOCAB_SIZE
+
 
 class EuclidianNeuralNet(nn.Module):
   def __init__(self, layers) -> None:
     super().__init__()
-    self.nucleotide_embedding = nn.Embedding(6, 16)
-    # TODO: thouroughly think about and understand values such as max_radius, num_neighbors and num_nodes
+    self.nucleotide_embedding = nn.Embedding(VOCAB_SIZE, 16)
+    
+    base_output_dim = f"16x0e + 1x1o + {N_ATOMS}x1o"
     base_kwargs = {
-        "irreps_in": o3.Irreps("32x0e + 1x1o + 24x1o"),
+        "irreps_in": o3.Irreps(f"32x0e + 1x1o + {N_ATOMS}x1o"),
         "irreps_hidden": "8x0e + 8x1o + 8x1e + 4x0o", # TODO: This should probably be the same as irreps in and irreps out 
-        "irreps_out": "16x0e + 1x1o + 24x1o",
+        "irreps_out": o3.Irreps(base_output_dim),
         "irreps_edge_attr": o3.Irreps.spherical_harmonics(3),
         "irreps_node_attr": None,
         "layers": layers,
@@ -29,9 +32,9 @@ class EuclidianNeuralNet(nn.Module):
     }
 
     self.base = Network(**base_kwargs)
-    self.s_head = o3.Linear("16x0e + 1x1o + 24x1o", "4x0e")
-    self.x_head = o3.Linear("16x0e + 1x1o + 24x1o", "1x1o")
-    self.v_head = o3.Linear("16x0e + 1x1o + 24x1o", "24x1o")
+    self.s_head = o3.Linear(base_output_dim, f"{NUM_BASES}x0e")
+    self.x_head = o3.Linear(base_output_dim, "1x1o")
+    self.v_head = o3.Linear(base_output_dim, f"{N_ATOMS}x1o")
 
     for head in (self.s_head, self.x_head, self.v_head):
       nn.init.zeros_(head.weight) 
@@ -68,9 +71,9 @@ class EuclidianNeuralNet(nn.Module):
 
     res = self.base(data)
     
-    s_res = self.s_head(res)   # [<B, 4] 
-    x_res = self.x_head(res)   # [<B, 3] 
-    v_res = self.v_head(res)   # [<B, 72] 
+    s_res = self.s_head(res)   # (B, NUM_BASES)
+    x_res = self.x_head(res)   # (B, 3)
+    v_res = self.v_head(res)   # (B, N_ATOMS * 3)
 
     res = torch.concat((s_res, x_res, v_res), dim=-1)
 
@@ -78,8 +81,8 @@ class EuclidianNeuralNet(nn.Module):
     out[keep] = res
     out = out.reshape(B, L, -1)
 
-    s_pred = out[:,:,:4]
-    x_pred = out[:,:,4:7]
-    v_pred = out[:,:,7:]
+    s_pred = out[:, :, :NUM_BASES]
+    x_pred = out[:, :, NUM_BASES:NUM_BASES + 3]
+    v_pred = out[:, :, NUM_BASES + 3:]
 
     return s_pred, x_pred, v_pred

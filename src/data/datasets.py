@@ -1,6 +1,9 @@
 import numpy as np
 from torch.utils.data import Dataset
 
+from dataset import PAD_IDX
+
+
 class RNACoGenerationDataset(Dataset):
     def __init__(self, s, x, v) -> None:
         self.N, self.L = s.shape
@@ -11,9 +14,7 @@ class RNACoGenerationDataset(Dataset):
         self.atom_mask = np.where(np.isnan(self.v), 0, 1)
         self.v = np.nan_to_num(self.v)
 
-        self.s = np.where(
-            self.s == -1, np.max(s) + 1, self.s
-        )  # NOTE: Pad idx set to max + 1
+        self.s = np.where(self.s == -1, PAD_IDX, self.s)
 
         print(f"Dataset Loaded {self.s.shape=} {self.x.shape=} {self.v.shape=}")
 

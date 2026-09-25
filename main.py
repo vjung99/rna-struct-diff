@@ -1,3 +1,7 @@
+"""
+MAIN training loop. 
+"""
+
 import argparse
 
 import numpy as np
@@ -9,28 +13,18 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 import wandb
 
+from dataset import MASK_IDX, N_ATOMS, NUM_BASES
 from pdb_utils import save_pdb
 from src.data.datasets import RNACoGenerationDataset
 from src.nn.EuclidianNeuralNet import EuclidianNeuralNet
 from src.nn.MultiflowLoss import MultiflowLoss
 
-"""
-
-MAIN training loop. 
-TODO: Implement RNAFLOW
-  - e3nn architecture -> done
-  - data preprocessing -> done
-  - Multiflow flow matching with discrete flow matching for sequence generation
-
-"""
-
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MASK_TOKEN = 5
 torch.manual_seed(42)
 
 
 def centered_noise(shape):
-    noise = torch.normal(torch.zeros(shape))
+    noise = torch.normal(torch.zeros(shape, device=DEVICE))
     return noise - noise.mean(dim=1, keepdim=True)
 
 
@@ -42,7 +36,7 @@ def sample_from_model(s_0, x_0, v_0, model, steps=200, epsilon=1e-2):
         tokens = torch.multinomial(
             F.softmax(s_logits, dim=-1).flatten(0, 1), 1
         ).reshape(s_0.shape)
-        return torch.where(draw & (s_0 == MASK_TOKEN), tokens, s_0)
+        return torch.where(draw & (s_0 == MASK_IDX), tokens, s_0)
 
     B, L = s_0.shape
 
@@ -58,7 +52,8 @@ def sample_from_model(s_0, x_0, v_0, model, steps=200, epsilon=1e-2):
         s_0 = unmask_seq_random(s_0, s_logits, dt, t)
         prev_t = t
 
-    s_0 = torch.where(s_0 == MASK_TOKEN, s_logits.argmax(dim=-1), s_0)
+    # Force any remaining position to unmask
+    s_0 = torch.where(s_0 >= NUM_BASES, s_logits.argmax(dim=-1), s_0)
     return s_0, x_0, v_0
 
 
@@ -72,7 +67,6 @@ def mask_seq(s: torch.Tensor, x, v, mask_char, epsilon=1e-2):
     # TODO: after Ribogen test try correlated masking (same area of sequence / geometry)
     t = torch.rand(B, device=s.device)  # t sampled from U(0,1)
     t = t * (1 - 2 * epsilon) + epsilon
-    # TODO: The noised version of X and V should not be mask tokens but should be Normal distribution for V and maybe exp like (12) in Multiflow for X
     s_t[torch.rand((B, L), device=s.device) < t[:, None]] = mask_char
 
     v_0 = torch.normal(torch.zeros_like(v)).to(s.device)
@@ -96,7 +90,7 @@ def run_epoch(model, optimizer, dataloader, loss_func, wandb_run):
         atom_mask = atom_mask.to(DEVICE)
 
         s_t, x_t, v_t, x_0, v_0, t = mask_seq(
-            s_b, x_b, v_b, MASK_TOKEN
+            s_b, x_b, v_b, MASK_IDX
         )
         s_pred, x_pred, v_pred = model(s_t, x_t, v_t, t, token_mask)
 
@@ -105,7 +99,7 @@ def run_epoch(model, optimizer, dataloader, loss_func, wandb_run):
             x_b,
             v_pred,
             v_b,
-            s_pred.reshape((-1, 4)),
+            s_pred.reshape((-1, NUM_BASES)),
             s_b.reshape(-1),
             token_mask,
             atom_mask,
@@ -128,7 +122,7 @@ def train(model, dataloader, args):
         config={},
     )
 
-    print(f"Imported dataset {s.shape=} {x.shape=} {v.shape=}")
+    print(f"Imported dataset {dataloader.dataset.s.shape=} {dataloader.dataset.x.shape=} {dataloader.dataset.v.shape=}")
 
     loss_func = MultiflowLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
@@ -183,9 +177,9 @@ if __name__ == "__main__":
             train(model, dataloader, args)
         case "inference":
             model.load_state_dict(torch.load(args.checkpoint, weights_only=True))
-            s_0 = torch.full((args.samples, args.length), MASK_TOKEN, dtype=torch.long, device=DEVICE)
+            s_0 = torch.full((args.samples, args.length), MASK_IDX, dtype=torch.long, device=DEVICE)
             x_0 = centered_noise((args.samples, args.length, 3)).to(DEVICE)
-            v_0 = torch.randn(args.samples, args.length, 72, device=DEVICE)
+            v_0 = torch.randn(args.samples, args.length, N_ATOMS * 3, device=DEVICE)
             s, x, v = sample_from_model(s_0, x_0, v_0, model, steps=args.steps)
             df = np.load(args.dataset)
             x_A = x.cpu().numpy() * float(df["x_scale"])
@@ -196,6 +190,6 @@ if __name__ == "__main__":
                 X=x_A,
                 V=v_A,
             )
-            print("masks left:", int((s == MASK_TOKEN).sum()))
+            print("masks left:", int((s == MASK_IDX).sum()))
             for k in range(args.samples):
                 save_pdb(f"{args.out}/sample_{k}.pdb", s[k], x_A[k], v_A[k])
