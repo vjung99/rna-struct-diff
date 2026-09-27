@@ -7,7 +7,7 @@ import argparse
 import numpy as np
 import torch
 import torch.nn.functional as F
-import torch.nn as nn
+from torch import nn
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
@@ -15,7 +15,7 @@ import wandb
 
 from dataset import MASK_IDX, N_ATOMS, NUM_BASES
 from pdb_utils import save_pdb
-from src.data.datasets import RNACoGenerationDataset
+from src.data.datasets import BatchSampler, RNACoGenerationDataset
 from src.nn.EuclidianNeuralNet import EuclidianNeuralNet
 from src.nn.MultiflowLoss import MultiflowLoss
 
@@ -125,10 +125,12 @@ def train(model, dataloader, args):
     print(f"Imported dataset {dataloader.dataset.s.shape=} {dataloader.dataset.x.shape=} {dataloader.dataset.v.shape=}")
 
     loss_func = MultiflowLoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
     scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     for i in range(args.epochs):
+        if hasattr(dataloader.batch_sampler, "set_epoch"):
+            dataloader.batch_sampler.set_epoch(i)
         run_epoch(model, optimizer, dataloader, loss_func, wandb_run)
         scheduler.step()
         torch.save(model.state_dict(), args.checkpoint)
@@ -171,8 +173,12 @@ if __name__ == "__main__":
             x = df["X"]
             v = df["V"]
             dataset = RNACoGenerationDataset(s, x, v)
+
+            node_counts = (s != -1).sum(axis=1)
+            _ ,seq_group = np.unique(s, axis=0, return_inverse=True)
+            batch_sampler = BatchSampler(node_counts, seq_group=seq_group)
             dataloader = DataLoader(
-                dataset, batch_size=args.batch_size, shuffle=True, num_workers=0
+                dataset, num_workers=0, batch_sampler=batch_sampler
             )
             train(model, dataloader, args)
         case "inference":

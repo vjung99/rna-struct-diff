@@ -54,9 +54,10 @@ class VectorMap3dLoss(nn.Module):
         l_struct = (2 * N_atoms * sq_sum - 2 * (sum_d * sum_d).sum(dim=-1)) / (
             3 * N_atoms.clamp(min=1) ** 2
         )
+        w = N_atoms.float()
         valid = N_atoms > 0
 
-        return l_struct[valid].mean()
+        return (l_struct[valid] * w[valid]).sum() / w[valid].sum()
 
 
 class DiscreteFlowMatching(nn.Module):

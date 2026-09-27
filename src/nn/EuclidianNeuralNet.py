@@ -22,7 +22,7 @@ class EuclidianNeuralNet(nn.Module):
         "irreps_edge_attr": o3.Irreps.spherical_harmonics(3),
         "irreps_node_attr": None,
         "layers": layers,
-        "max_radius": 0.8,
+        "max_radius": 0.127,
         "number_of_basis": 10,
         "radial_layers": 1,
         "radial_neurons": 128,
