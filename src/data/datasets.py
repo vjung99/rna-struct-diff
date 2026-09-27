@@ -7,8 +7,10 @@ from dataset import PAD_IDX
 
 
 class RNACoGenerationDataset(Dataset):
-    def __init__(self, s, x, v) -> None:
+    def __init__(self, s, x, v, crop_len = 256, seed=0) -> None:
         self.N, self.L = s.shape
+        self.crop_len = crop_len
+        self.rng = np.random.default_rng(seed)
 
         self.s, self.x, self.v = s, np.nan_to_num(x), v.reshape(self.N, self.L, -1)
 
@@ -24,12 +26,19 @@ class RNACoGenerationDataset(Dataset):
         return len(self.s)
 
     def __getitem__(self, index):
+        len = (self.s[index, :] != PAD_IDX).sum()
+        if len > self.crop_len:
+            end_idx = self.rng.integers(self.crop_len, len)
+            start_idx = end_idx - self.crop_len
+        else:
+            start_idx, end_idx = 0, self.crop_len
+
         return (
-            self.s[index, :],
-            self.x[index, :, :],
-            self.v[index, :, :],
-            self.token_mask[index, :],
-            self.atom_mask[index, :, :],
+            self.s[index, start_idx:end_idx],
+            self.x[index, start_idx:end_idx, :],
+            self.v[index, start_idx:end_idx, :],
+            self.token_mask[index, start_idx:end_idx],
+            self.atom_mask[index, start_idx:end_idx, :],
         )
 
 # Taken from https://github.com/chaitjo/geometric-rna-design/blob/main/src/data/dataset.py

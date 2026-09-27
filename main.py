@@ -108,9 +108,10 @@ def run_epoch(model, optimizer, dataloader, loss_func, wandb_run):
 
         losses = {k:v.item() for (k, v) in loss.items()}
         pbar.set_description(f"Loss: {losses}")
-        wandb_run.log(loss)
 
         loss["loss"].backward()
+        gn = nn.utils.get_total_norm(model.parameters())
+        wandb_run.log({**loss, "lr": optimizer.param_groups[0]["lr"], "grad_norm": gn})
         nn.utils.clip_grad_norm_(model.parameters(), 1)
         optimizer.step()
 
@@ -119,13 +120,20 @@ def train(model, dataloader, args):
     wandb_run = wandb.init(
         entity="ayynoa",
         project="rna-cogeneration",
-        config={},
+        config={
+            "lr": 1e-3,
+            "layers": args.layers,
+            "sampler": "batch",
+            "max_nodes_batch": 3000,
+            "crop_len": 256,
+            "epochs": args.epochs,
+        },
     )
 
     print(f"Imported dataset {dataloader.dataset.s.shape=} {dataloader.dataset.x.shape=} {dataloader.dataset.v.shape=}")
 
     loss_func = MultiflowLoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     for i in range(args.epochs):
@@ -174,7 +182,7 @@ if __name__ == "__main__":
             v = df["V"]
             dataset = RNACoGenerationDataset(s, x, v)
 
-            node_counts = (s != -1).sum(axis=1)
+            node_counts = np.minimum((s != -1).sum(axis=1), dataset.crop_len)
             _ ,seq_group = np.unique(s, axis=0, return_inverse=True)
             batch_sampler = BatchSampler(node_counts, seq_group=seq_group)
             dataloader = DataLoader(
