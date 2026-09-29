@@ -6,7 +6,7 @@ from e3nn import o3
 
 import math
 
-from dataset import N_ATOMS, NUM_BASES, VOCAB_SIZE
+from src.constants import N_ATOMS, NUM_BASES, VOCAB_SIZE
 
 
 class EuclidianNeuralNet(nn.Module):

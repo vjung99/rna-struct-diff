@@ -3,6 +3,7 @@ MAIN training loop.
 """
 
 import argparse
+import os
 
 import numpy as np
 import torch
@@ -13,9 +14,10 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 import wandb
 
-from dataset import MASK_IDX, N_ATOMS, NUM_BASES
+from src.constants import MASK_IDX, N_ATOMS, NUM_BASES, PAD_IDX
 from pdb_utils import save_pdb
 from src.data.datasets import BatchSampler, RNACoGenerationDataset
+from src.data.sec_utils import Sequence
 from src.nn.EuclidianNeuralNet import EuclidianNeuralNet
 from src.nn.MultiflowLoss import MultiflowLoss
 
@@ -80,14 +82,15 @@ def mask_seq(s: torch.Tensor, x, v, mask_char, epsilon=1e-2):
 
 def run_epoch(model, optimizer, dataloader, loss_func, wandb_run):
     model.train()
-    for s_b, x_b, v_b, token_mask, atom_mask in (pbar := tqdm(dataloader)):
+    for s_b, x_b, v_b, atom_mask in (pbar := tqdm(dataloader)):
         optimizer.zero_grad()
 
         s_b = s_b.to(DEVICE)
         x_b = x_b.to(DEVICE)
         v_b = v_b.to(DEVICE)
-        token_mask = token_mask.to(DEVICE)
         atom_mask = atom_mask.to(DEVICE)
+
+        token_mask = s_b != PAD_IDX
 
         s_t, x_t, v_t, x_0, v_0, t = mask_seq(
             s_b, x_b, v_b, MASK_IDX
@@ -116,6 +119,17 @@ def run_epoch(model, optimizer, dataloader, loss_func, wandb_run):
         optimizer.step()
 
 
+def split_stats(name, sequences, crop_len=256):
+    """One line per split: unique sequences, structures, cropped nodes, length range."""
+    lengths = np.array([seq.length for seq in sequences])
+    n_struct = sum(len(seq) for seq in sequences)
+    nodes = int(np.minimum(lengths, crop_len).sum())
+    print(
+        f"{name}: {len(sequences)} unique sequences, {n_struct} structures, {nodes} nodes, "
+        f"residues {lengths.min()}-{lengths.max()} (median {int(np.median(lengths))})"
+    )
+
+
 def train(model, dataloader, args):
     wandb_run = wandb.init(
         entity="ayynoa",
@@ -129,8 +143,6 @@ def train(model, dataloader, args):
             "epochs": args.epochs,
         },
     )
-
-    print(f"Imported dataset {dataloader.dataset.s.shape=} {dataloader.dataset.x.shape=} {dataloader.dataset.v.shape=}")
 
     loss_func = MultiflowLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
@@ -154,7 +166,8 @@ def getargs():
     t.add_argument("-e", "--epochs", type=int, default=10)
     t.add_argument("-b", "--batch_size", type=int, default=32)
     t.add_argument("-l", "--layers", type=int, default=4)
-    t.add_argument("-d", "--dataset", default="./dataset/dataset.npz")
+    t.add_argument("-d", "--dataset", default="./data/processed.pt")
+    t.add_argument("--split", default="./data/das_split.pt")
 
     # Inference
     i = sub.add_parser("inference")
@@ -164,7 +177,6 @@ def getargs():
     i.add_argument("--length", type=int, default=70)
     i.add_argument("--samples", type=int, default=10)
     i.add_argument('-o', '--out', default='./samples')
-    i.add_argument("-d", "--dataset", default="./dataset/dataset.npz")
 
     return parser.parse_args()
 
@@ -176,15 +188,13 @@ if __name__ == "__main__":
 
     match args.cmd:
         case "train":
-            df = np.load(args.dataset)
-            s = df["S"]
-            x = df["X"]
-            v = df["V"]
-            dataset = RNACoGenerationDataset(s, x, v)
+            sequences = Sequence.load_sequences_from_file(args.dataset)
+            train_idx, val_idx, test_idx = torch.load(args.split, weights_only=False)
+            for name, idx in (("train", train_idx), ("val", val_idx), ("test", test_idx)):
+                split_stats(name, [sequences[i] for i in idx])
+            dataset = RNACoGenerationDataset([sequences[i] for i in train_idx])
 
-            node_counts = np.minimum((s != -1).sum(axis=1), dataset.crop_len)
-            _ ,seq_group = np.unique(s, axis=0, return_inverse=True)
-            batch_sampler = BatchSampler(node_counts, seq_group=seq_group)
+            batch_sampler = BatchSampler(dataset.node_counts)
             dataloader = DataLoader(
                 dataset, num_workers=0, batch_sampler=batch_sampler
             )
@@ -195,15 +205,22 @@ if __name__ == "__main__":
             x_0 = centered_noise((args.samples, args.length, 3)).to(DEVICE)
             v_0 = torch.randn(args.samples, args.length, N_ATOMS * 3, device=DEVICE)
             s, x, v = sample_from_model(s_0, x_0, v_0, model, steps=args.steps)
-            df = np.load(args.dataset)
-            x_A = x.cpu().numpy() * float(df["x_scale"])
-            v_A = v.cpu().numpy() * float(df["v_scale"])
-            np.savez(
-                args.out,
-                S=s.cpu().numpy(),
-                X=x_A,
-                V=v_A,
-            )
+            s_np = s.cpu().numpy()
+            x_A = x.cpu().numpy()
+            v_A = v.cpu().numpy()
+            padded = s_np == PAD_IDX
+            x_A[padded] = np.nan
+            v_A[padded] = np.nan
+            s_np[padded] = 0
+            np.savez(os.path.join(args.out, "samples.npz"), S=s_np, X=x_A, V=v_A)
             print("masks left:", int((s == MASK_IDX).sum()))
             for k in range(args.samples):
-                save_pdb(f"{args.out}/sample_{k}.pdb", s[k], x_A[k], v_A[k])
+                # token 4 ('N') is not writable as a residue name
+                writable = s_np[k] < NUM_BASES - 1
+                print(f"sample {k}: {int((~writable).sum())} unknown residues dropped")
+                save_pdb(
+                    f"{args.out}/sample_{k}.pdb",
+                    s_np[k][writable],
+                    x_A[k][writable],
+                    v_A[k][writable],
+                )

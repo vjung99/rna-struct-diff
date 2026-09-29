@@ -1,45 +1,27 @@
-import random
-
 import numpy as np
 from torch.utils.data import Dataset, Sampler
 
-from dataset import PAD_IDX
+from src.data.sec_utils import Sequence
 
 
 class RNACoGenerationDataset(Dataset):
-    def __init__(self, s, x, v, crop_len = 256, seed=0) -> None:
-        self.N, self.L = s.shape
+    """One item per unique sequence, padded/cropped to ``crop_len``; a random structure
+    and window per draw, so one epoch sees one conformer each."""
+
+    def __init__(self, sequences: list[Sequence], crop_len=256, seed=0) -> None:
+        self.sequences = sequences
         self.crop_len = crop_len
         self.rng = np.random.default_rng(seed)
 
-        self.s, self.x, self.v = s, np.nan_to_num(x), v.reshape(self.N, self.L, -1)
-
-        self.token_mask = np.where(self.s == -1, 0, 1)
-        self.atom_mask = np.where(np.isnan(self.v), 0, 1)
-        self.v = np.nan_to_num(self.v)
-
-        self.s = np.where(self.s == -1, PAD_IDX, self.s)
-
-        print(f"Dataset Loaded {self.s.shape=} {self.x.shape=} {self.v.shape=}")
+        self.node_counts = np.minimum(
+            np.array([seq.length for seq in sequences]), crop_len
+        )
 
     def __len__(self):
-        return len(self.s)
+        return len(self.sequences)
 
     def __getitem__(self, index):
-        len = (self.s[index, :] != PAD_IDX).sum()
-        if len > self.crop_len:
-            end_idx = self.rng.integers(self.crop_len, len)
-            start_idx = end_idx - self.crop_len
-        else:
-            start_idx, end_idx = 0, self.crop_len
-
-        return (
-            self.s[index, start_idx:end_idx],
-            self.x[index, start_idx:end_idx, :],
-            self.v[index, start_idx:end_idx, :],
-            self.token_mask[index, start_idx:end_idx],
-            self.atom_mask[index, start_idx:end_idx, :],
-        )
+        return self.sequences[index].get_random_sample(self.rng, self.crop_len)
 
 # Taken from https://github.com/chaitjo/geometric-rna-design/blob/main/src/data/dataset.py
 # Added sequence groups (only one identical sequence can appear per epoch)
@@ -74,26 +56,19 @@ class BatchSampler(Sampler):
             and False for evaluation. Defaults to True.
     """
 
-    def __init__(self, node_counts, max_nodes_batch=3000, max_nodes_sample=5000, shuffle=True, seq_group= None, seed = 0):
-        self.groups = None
-        if seq_group is not None:
-          self.groups = {}
-          for i, g in enumerate(np.asarray(seq_group)):
-            self.groups.setdefault(int(g), []).append(i)
-          self.epoch = 0
-
+    def __init__(self, node_counts, max_nodes_batch=3000, max_nodes_sample=5000, shuffle=True, seed=0):
         self.seed = seed
         self.node_counts = node_counts
         self.shuffle = shuffle
         self.max_nodes_batch = max_nodes_batch
         self.max_nodes_sample = max_nodes_sample
+        self.epoch = 0
 
         self._form_batches()
 
     def set_epoch(self, epoch):
-        if self.groups is not None:
-          self.epoch = epoch
-          self._form_batches()
+        self.epoch = epoch
+        self._form_batches()
 
     def _form_batches(self):
         """Construct batches by greedily grouping samples to maximize node count per batch.
@@ -108,27 +83,14 @@ class BatchSampler(Sampler):
         The resulting batches are stored in self.batches as a list of lists, where each
         inner list contains dataset indices for structures in that batch.
         """
-        if self.groups is not None:
-          rng = np.random.default_rng(self.seed + self.epoch)
+        rng = np.random.default_rng(self.seed + self.epoch)
 
-          keys = list(self.groups)
-          picks = [self.groups[k][int(rng.integers(len(self.groups[k])))] for k in keys]
-
-          max_nodes = min(self.max_nodes_batch, self.max_nodes_sample)
-          self.idx = [i for i in picks if self.node_counts[i] <= max_nodes]
-          self.batches_single = [
-              [i] for i in picks if max_nodes < self.node_counts[i] <= self.max_nodes_sample
-          ]
-        else:
-          rng = np.random.default_rng(self.seed)
-
-          # no grouping: every row is a candidate, as in the original gRNAde sampler
-          max_nodes = min(self.max_nodes_batch, self.max_nodes_sample)
-          self.idx = [i for i in range(len(self.node_counts)) if self.node_counts[i] <= max_nodes]
-          self.batches_single = [
-              [i] for i in range(len(self.node_counts))
-              if max_nodes < self.node_counts[i] <= self.max_nodes_sample
-          ]
+        max_nodes = min(self.max_nodes_batch, self.max_nodes_sample)
+        self.idx = [i for i in range(len(self.node_counts)) if self.node_counts[i] <= max_nodes]
+        self.batches_single = [
+            [i] for i in range(len(self.node_counts))
+            if max_nodes < self.node_counts[i] <= self.max_nodes_sample
+        ]
 
         self.batches = []
         if self.shuffle:
@@ -142,12 +104,14 @@ class BatchSampler(Sampler):
                 next_idx, idx = idx[0], idx[1:]
                 n_nodes += self.node_counts[next_idx]
                 batch.append(next_idx)
+            if not batch:                       # rows larger than max_nodes_batch
+                batch, idx = [idx[0]], idx[1:]
             self.batches.append(batch)
 
         if len(self.batches_single) > 0:
             self.batches += self.batches_single
             if self.shuffle:
-                random.shuffle(self.batches)
+                rng.shuffle(self.batches)
 
     def __len__(self):
         """Return the total number of batches.
@@ -155,8 +119,6 @@ class BatchSampler(Sampler):
         Returns:
             int: Number of batches that will be yielded during iteration
         """
-        if not self.batches:
-            self._form_batches()
         return len(self.batches)
 
     def __iter__(self):
@@ -166,6 +128,4 @@ class BatchSampler(Sampler):
             list: List of integer dataset indices for each batch. Each yielded list
                 contains indices of RNA structures that should be collated together.
         """
-        if not self.batches:
-            self._form_batches()
         yield from self.batches

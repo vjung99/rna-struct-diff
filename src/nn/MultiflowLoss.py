@@ -1,7 +1,7 @@
 from torch import nn
 import torch.nn.functional as F
 
-from dataset import N_ATOMS
+from src.constants import N_ATOMS
 
 
 class MultiflowLoss(nn.Module):

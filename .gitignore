@@ -1,13 +1,16 @@
-# pixi environments
-.pixi/*
-!.pixi/config.toml
 /dataset/BGSU__M__All__All__4_0__pdb_4_55
 /dataset/oversize
-/__pycache__
+**/__pycache__
 /dataset
-/src/data/__pycache__
-/src/nn/__pycache__
 /wandb
 /samples
-/.DS_Store
+**/.DS_Store
 /e3nn_checkpoint.pt
+/data/raw
+/tools/x3dna-v2.4
+/.env
+/data/processed.pt
+/data/processed_df.csv
+/.python-version
+/rcp
+/uv.lock
