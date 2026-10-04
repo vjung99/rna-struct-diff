@@ -1,0 +1,10 @@
+{
+  "split": "val",
+  "msa": "tier1",
+  "weights": "RF2NA_apr23.pt",
+  "weights_bytes": 1095300489,
+  "n_done": 2,
+  "n_skipped": 0,
+  "n_failed": 0,
+  "elapsed_s": 169.2
+}

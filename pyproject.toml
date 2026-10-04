@@ -9,6 +9,7 @@ dependencies = [
     "biopython>=1.88",
     "biotite>=1.6.0",
     "cpdb-protein>=0.2.1",
+    "dllogger",
     "dotenv>=0.9.9",
     "e3nn>=0.6.0",
     "lovely-tensors>=0.1.22",
@@ -17,9 +18,13 @@ dependencies = [
     "plotly>=7.0.0",
     "polars>=1.44.1",
     "pyarrow>=25.0.1",
+    "pynvml==11.0.0",
     "scipy>=1.17.1",
     "seaborn>=0.13.2",
     "torch>=2.14.0",
     "tqdm>=4.70.1",
     "wandb>=0.30.0",
 ]
+
+[tool.uv.sources]
+dllogger = { git = "https://github.com/NVIDIA/dllogger" }

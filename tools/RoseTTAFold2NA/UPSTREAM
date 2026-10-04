@@ -1,0 +1,10 @@
+https://github.com/uw-ipd/RoseTTAFold2NA
+revision: f761af286729ea08a6ddab149023c1b73458fbe2
+license: MIT (see LICENSE)
+
+Vendored unmodified. Local additions, none of which touch upstream files:
+  run_cpu.py          null-context shim for torch.cuda.nvtx on CPU-only torch
+  eval/env.lock       pinned env recipe (DGL pins torch to 2.1.x)
+  eval/bridge.py      RF2NA PDB -> our (L, 27, 3) convention
+  eval/precompute.py  resumable target-fold driver
+  stub/               template-DB stand-in (never read for R: inputs)

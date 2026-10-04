@@ -1,0 +1,8 @@
+env/
+spike/
+network/weights/
+network/*.tgz
+network/__pycache__/
+SE3Transformer/build/
+SE3Transformer/*.egg-info/
+**/__pycache__/
